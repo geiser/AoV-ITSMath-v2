@@ -1,0 +1,63 @@
+
+{{ title }}
+
+## Descriptive Statistics
+
+```{r}
+df <- get.descriptives(ldat[["grupo"]], c(dv.pre, dv.pos), c("grupo"), 
+                       include.global = T, symmetry.test = T, normality.test = F)
+df <- plyr::rbind.fill(
+  df, do.call(plyr::rbind.fill, lapply(lfatores2, FUN = function(f) {
+    if (nrow(dat) > 0 && sum(!is.na(unique(dat[[f]]))) > 1 && paste0("grupo:",f) %in% names(ldat))
+      get.descriptives(ldat[[paste0("grupo:",f)]], c(dv.pre,dv.pos), c("grupo", f),
+                       symmetry.test = T, normality.test = F)
+    }))
+)
+df <- df[,c(fatores1[fatores1 %in% colnames(df)],"variable",
+             colnames(df)[!colnames(df) %in% c(fatores1,"variable")])]
+```
+
+```{r, echo=FALSE, purl=FALSE}
+kable(df, digits = 3)
+```
+
+
+## ANCOVA Table Comparison
+
+```{r}
+df <- do.call(plyr::rbind.fill, laov)
+df <- df[!duplicated(df$Effect),]
+```
+
+```{r, echo=FALSE, purl=FALSE}
+kable(df, digits = 3)
+```
+
+
+## PairWise Table Comparison
+
+```{r}
+df <- do.call(plyr::rbind.fill, lpwc)
+df <- df[,c(names(lfatores)[names(lfatores) %in% colnames(df)],
+            names(df)[!names(df) %in% c(names(lfatores),"term",".y.")])]
+```
+
+```{r, echo=FALSE, purl=FALSE}
+kable(df, digits = 3)
+```
+
+
+## EMMS Table Comparison
+
+```{r}
+df <- do.call(plyr::rbind.fill, lemms)
+df[["N-N'"]] <- df[["N"]] - df[["N'"]]
+df <- df[,c(names(lfatores)[names(lfatores) %in% colnames(df)],
+            names(df)[!names(df) %in% names(lfatores)])]
+```
+
+```{r, echo=FALSE, purl=FALSE}
+kable(df, digits = 3)
+```
+
+

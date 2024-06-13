@@ -1,0 +1,204 @@
+
+# {{ title }}
+
+
+```{r}
+pdat = remove_group_data(
+  dat[!is.na(dat[["{{ iv1 }}"]]) & !is.na(dat[["{{ iv2 }}"]]),],
+  "{{ dv.dif }}", c("{{ iv1 }}","{{ iv2 }}"))
+
+pdat.long <- rbind(pdat[,c("ID","{{ iv1 }}","{{ iv2 }}")],
+                   pdat[,c("ID","{{ iv1 }}","{{ iv2 }}")])
+pdat.long[["{{ pivot.key }}"]] <- c(rep("pre", nrow(pdat)), rep("pos", nrow(pdat)))
+pdat.long[["{{ pivot.key }}"]] <- factor(pdat.long[["{{ pivot.key }}"]], c("pre","pos"))
+pdat.long[["{{ pivot.value }}"]] <- c(pdat[["{{ dv.pre }}"]], pdat[["{{ dv.pos }}"]])
+
+y.position.min <- abs(
+  max(pdat.long[["{{ pivot.value }}"]])
+  - min(pdat.long[["{{ pivot.value }}"]]))/20
+
+lvars = as.list(c("{{ dv.dif }}","{{ dv.pos }}","{{ dv.pre }}"))
+names(lvars) = unlist(lvars)
+```
+
+## Pre-test and Post-test PairWise comparisons for: *{{ pivot.value }} ~ {{ iv1 }}:{{ iv2 }}*
+
+```{r}
+pwc.long <- group_by(pdat.long, {{ iv1 }}:{{ iv2 }}) %>%
+  pairwise_wilcox_test({{ pivot.value }} ~ {{ pivot.key }}, detailed = T)
+
+df <- pwc.long[,c(".y.","{{ iv1 }}:{{ iv2 }}","group1","group2","n1","n2","estimate",
+                  "statistic","p.adj","p.adj.signif")]
+```
+
+```{r, echo=FALSE, purl=FALSE}
+kable(df)
+```
+
+```{r, dpi=300, fig.width={{ pfig.width }}, fig.height={{ pfig.height }}}
+stat.test <- pwc.long %>% add_xy_position(x = "{{ iv1 }}:{{ iv2 }}", fun = "max")
+sidx = which(stat.test$p.adj.signif != "ns")
+stat.test$y.position[sidx] <- stat.test$y.position[sidx] + y.position.min * (1:length(sidx))
+
+pdat.long[[paste0(c("{{ iv1 }}","{{ iv2 }}"), collapse = ":")]] = apply(
+  pdat.long[, c("{{ iv1 }}","{{ iv2 }}")], 1, paste0, collapse = ":")
+
+ggboxplot(pdat.long, x = "{{ iv1 }}:{{ iv2 }}", y = "{{ pivot.value }}",
+          palette = color$prepost, fill = "{{ pivot.key }}") +
+  stat_pvalue_manual(stat.test, tip.length = 0, hide.ns = T,
+                     label = "{ p.adj } ({ p.adj.signif })") + xlab("")
+```
+
+
+```{r, dpi=300, fig.width={{ pfig.width }}, fig.height={{ pfig.height }}}
+pwc.long <- group_by(pdat.long, {{ iv1 }}, {{ iv2 }}) %>%
+  pairwise_wilcox_test({{ pivot.value }} ~ {{ pivot.key }}, detailed = T)
+
+stat.test <- pwc.long %>% add_xy_position(x = "{{ pivot.key }}", fun = "mean_se")
+sidx = which(stat.test$p.adj.signif != "ns")
+stat.test$y.position[sidx] <- stat.test$y.position[sidx] + y.position.min * (1:length(sidx))
+
+gg <- ggline(
+  pdat.long, x = "{{ pivot.key }}", y = "{{ pivot.value }}",
+  color = "{{ iv2 }}", linetype = "{{ iv2 }}", shape = "{{ iv2 }}", size = 1.5,
+  facet.by = "{{ iv1 }}", add = c("mean_se"),
+  position = position_dodge(width = 0.3), palette = color[["{{ iv2 }}"]])
+
+pdat.long$xj = jitter(as.numeric(pdat.long[["{{ pivot.key }}"]]), amount=.1)
+pdat.long$yj = jitter(pdat.long[["{{ pivot.value }}"]], amount = .01)
+
+gg + geom_point(
+  data = pdat.long, aes_string(x="xj",y="yj",colour="{{ iv2 }}"), size=0.5) +
+  stat_pvalue_manual(
+    stat.test, tip.length = 0, hide.ns = T, label.size = 5,
+    position = position_dodge(width = 0.3), color = "{{ iv2 }}",
+    label = "{ p.adj } ({ p.adj.signif })") + xlab("") +
+  theme(strip.text = element_text(size = 16),
+        axis.text = element_text(size = 18))
+```
+
+## Scheirer and Wilcoxon PairWise comparisons for: *{{ pivot.value }} ~ {{ iv1 }}:{{ iv2 }}*
+
+
+```{r}
+sch <- lapply(lvars, FUN = function(x) {
+  scheirer.test(pdat, x, c("{{ iv1 }}","{{ iv2 }}"), as.table = T) 
+})
+df <- do.call(rbind.fill, sch)
+```
+
+```{r, echo=FALSE, purl=FALSE}
+kable(df)
+```
+
+
+```{r}
+pwc <- lapply(lvars, FUN = function(x) {
+  list(
+    {{ iv1 }} = tryCatch(pairwise_wilcox_test(group_by(pdat, {{ iv2 }}),
+                                 as.formula(paste0(x," ~ {{ iv1 }}")))
+                         , error = function(e) NULL),
+    {{ iv2 }} = tryCatch(pairwise_wilcox_test(group_by(pdat, {{ iv1 }}),
+                                 as.formula(paste0(x," ~ {{ iv2 }}")))
+                         , error = function(e) NULL)
+  )
+})
+
+df <- do.call(rbind.fill, lapply(pwc, FUN =  function(x) {
+  do.call(rbind.fill, x)
+}))
+
+ivs = c()
+if ("{{ iv1 }}" %in% colnames(df)) ivs = c(ivs, "{{ iv1 }}")
+if ("{{ iv2 }}" %in% colnames(df)) ivs = c(ivs, "{{ iv2 }}")
+df <- df[,c(".y.",ivs,"group1","group2","n1","n2",
+            "statistic","p.adj","p.adj.signif")]
+```
+
+
+```{r, echo=FALSE, purl=FALSE}
+kable(df)
+```
+
+
+```{r}
+plots <- lapply(lvars, FUN = function(y) {
+  livs = list("{{ iv1 }}", "{{ iv2 }}")
+  names(livs) = unlist(livs)
+  lapply(livs, FUN = function(x) {
+    iv2 = setdiff(names(livs), x)
+    if (!is.null(pwc[[y]][[iv2]])) {
+      stat.test <- pwc[[y]][[iv2]] %>% add_xy_position(x = x, fun = "max")
+      sidx = which(stat.test$p.adj.signif != "ns")
+      stat.test$y.position[sidx] <- stat.test$y.position[sidx] + y.position.min * (1:length(sidx))
+      
+      ggboxplot(pdat, x = x, y = y, fill = iv2, palette = color[[iv2]]) +
+        stat_pvalue_manual(stat.test, tip.length = 0, hide.ns = T, label.size = 5,
+                           label="{ p.adj } ({ p.adj.signif })") + xlab("")
+    }
+  })
+})
+```
+
+```{r, dpi=300, fig.width={{ fig.width*2 }}, fig.height={{ fig.height }}}
+if (!is.null(plots[["{{ dv.pre }}"]][["{{ iv1 }}"]]) &&
+    !is.null(plots[["{{ dv.pos }}"]][["{{ iv1 }}"]])) {
+  egg::ggarrange(plots[["{{ dv.pre }}"]][["{{ iv1 }}"]],
+                 plots[["{{ dv.pos }}"]][["{{ iv1 }}"]], nrow = 1)  
+}
+```
+
+
+```{r, dpi=300, fig.width={{ fig.width*2 }}, fig.height={{ fig.height }}}
+if (!is.null(plots[["{{ dv.pre }}"]][["{{ iv2 }}"]]) &&
+    !is.null(plots[["{{ dv.pos }}"]][["{{ iv2 }}"]])) {
+  egg::ggarrange(plots[["{{ dv.pre }}"]][["{{ iv2 }}"]],
+                 plots[["{{ dv.pos }}"]][["{{ iv2 }}"]], nrow = 1)
+}
+```
+
+```{r, dpi=300, fig.width={{ fig.width }}, fig.height={{ fig.height }}}
+psch = sch[["{{ dv.dif }}"]]
+idx = which(psch$Effect == "{{ iv1 }}:{{ iv2 }}") 
+
+dof = floor(as.double(psch$Df[idx]))
+dof.res = floor(as.double(psch$Df[which(psch$Effect == "Residuals")]))
+statistic = round(as.double(psch$H[idx]), 3)
+p = round(as.double(psch[["p.value"]][idx]), 3)
+pval = ifelse(p < 0.001,paste0(" , p<0.001"),paste0(" , p=",p))
+
+if (!is.null(plots[["{{ dv.dif }}"]][["{{ iv1 }}"]]))
+  plots[["{{ dv.dif }}"]][["{{ iv1 }}"]] +
+    labs(subtitle = paste0("Scheirer-Ray-Hare H(", dof, ",", 
+          dof.res, ")=", statistic, pval),
+         caption = get_pwc_label(pwc[["{{ dv.dif }}"]][["{{ iv2 }}"]])) +
+    ylab("{{ pivot.value }} (dif)") +
+  theme(strip.text = element_text(size = 16),
+        axis.text = element_text(size = 18))
+```
+
+
+```{r, dpi=300, fig.width={{ fig.width }}, fig.height={{ fig.height }}}
+psch = sch[["{{ dv.dif }}"]]
+idx = which(psch$Effect == "{{ iv1 }}:{{ iv2 }}") 
+
+dof = floor(as.double(psch$Df[idx]))
+dof.res = floor(as.double(psch$Df[which(psch$Effect == "Residuals")]))
+statistic = round(as.double(psch$H[idx]), 3)
+p = round(as.double(psch[["p.value"]][idx]), 3)
+pval = ifelse(p < 0.001,paste0(" , p<0.001"),paste0(" , p=",p))
+
+if (!is.null(plots[["{{ dv.dif }}"]][["{{ iv2 }}"]]))
+  plots[["{{ dv.dif }}"]][["{{ iv2 }}"]] +
+    labs(subtitle = paste0("Scheirer-Ray-Hare H(", dof, ",", 
+          dof.res, ")=", statistic, pval),
+         caption = get_pwc_label(pwc[["{{ dv.dif }}"]][["{{ iv1 }}"]])) +
+    ylab("{{ pivot.value }} (dif)") +
+  theme(strip.text = element_text(size = 16),
+        axis.text = element_text(size = 18))
+```
+
+
+
+
+

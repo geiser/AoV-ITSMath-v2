@@ -1,0 +1,189 @@
+---
+title: "ANCOVA for {{ title }}"
+author: Geiser C. Challco <geiser@alumni.usp.br>
+comment: Teste ANCOVA para determinar se houve diferenças significativas
+         na aprendizagem (medido usando pre- e pos-testes).
+         
+         ANCOVA test to determine whether there were significant differences
+         in the learning (measured using pre- and post-tests).
+         
+         Author - Geiser C. Challco <geiser@alumni.usp.br>
+         
+         Shiny-Statistic is distributed in the hope that it will be useful,
+         but WITHOUT ANY WARRANTY; without even the implied warranty of
+         MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+         GNU General Public License for more details.
+         
+         You should have received a copy of the GNU General Public License.
+         If not, see <https://www.gnu.org/licenses/>.
+output:
+  github_document:
+    toc: true
+  word_document:
+    toc: true
+  html_document:
+    toc: true
+fontsize: 10pt
+---
+
+
+```{r setup, include=FALSE}
+# Install and Load Packages
+if (!'remotes' %in% rownames(installed.packages())) install.packages('remotes')
+if (!"rshinystatistics" %in% rownames(installed.packages())) {
+  remotes::install_github("geiser/rshinystatistics")
+} else if (packageVersion("rshinystatistics") < "0.0.0.9900") {
+  remotes::install_github("geiser/rshinystatistics")
+}
+
+wants <- c('ggplot2','ggpubr','rshinystatistics','utils','randomcoloR')
+has <- wants %in% rownames(installed.packages())
+if (any(!has)) install.packages(wants[!has])
+
+library(readxl)
+
+library(shiny)
+library(esquisse)
+library(scales)
+library(knitr)
+library(rmarkdown)
+
+library(utils)
+library(ggpubr)
+library(ggplot2)
+library(randomcoloR)
+
+library(plyr)
+library(dplyr)
+
+library(rstatix)
+library(rshinystatistics)
+```
+
+```{r, include=FALSE, purl=FALSE}
+options(knitr.kable.NA = '')
+```
+
+# Setting Initial Variables
+
+```{r}
+dv = "{{ dv }}"
+dv.pos = "{{ dv.pos }}"
+dv.pre = "{{ dv.pre }}"
+
+fatores2 <- c({{ paste0(paste0('"', fatores ,'"'), collapse = ",") }})
+lfatores2 <- as.list(fatores2)
+names(lfatores2) <- fatores2
+
+fatores1 <- c("Group", fatores2)
+lfatores1 <- as.list(fatores1)
+names(lfatores1) <- fatores1
+
+lfatores <- c(lfatores1)
+
+color <- list()
+color[["prepost"]] = c("#ffee65","#f28e2B")
+color[["Group"]] = c("#bcbd22","#fd7f6f","#008000")
+color[["Gender"]] = c("#FF007F","#4D4DFF")
+color[["Town"]] = c("#AA00FF","#00CCCC")
+#color[["Cor.Raca"]] = c(
+#  "Parda"="#b97100","Indígena"="#9F262F",
+#  "Branca"="#87c498", "Preta"="#848283","Amarela"="#D6B91C"
+#)
+
+level <- list()
+level[["Group"]] = c("Ctr.A","Ctr.B","Exp")
+level[["Gender"]] = c("Female","Male")
+level[["Town"]] = c("Sorocaba - SP","Limoeiro - PE")
+level[["Degree"]] = c("3a","4a","5a")
+
+# ..
+
+color[["Group:Gender"]] = c(
+  "Ctr.A:Female"="#ffccbb", "Ctr.B:Female"="#ff99cc", "Exp:Female"="#FF007F",
+  "Ctr.A:Male"="#aabbff", "Ctr.B:Male"="#bbaaff", "Exp:Male"="#4D4DFF",
+  "Ctr.A.Female"="#ffccbb", "Ctr.B.Female"="#ff99cc", "Exp.Female"="#FF007F",
+  "Ctr.A.Male"="#aabbff", "Ctr.B.Male"="#bbaaff", "Exp.Male"="#4D4DFF"
+)
+color[["Group:Town"]] = c(
+  "Ctr.A:Sorocaba - SP"="#AA00FF", "Ctr.B:Sorocaba - SP"="#FF00FF", "Exp:Sorocaba - SP"="#AA00FF",
+  "Ctr.A:Limoeiro - PE"="#00EEFF", "Ctr.B:Limoeiro - PE"="#00EECC", "Exp:Limoeiro - PE"="#00CFCF",
+  "Ctr.A.Sorocaba - SP"="#AA00FF", "Ctr.B.Sorocaba - SP"="#FF00FF", "Exp.Sorocaba - SP"="#AA00FF",
+  "Ctr.A.Limoeiro - PE"="#00EEFF", "Ctr.B.Limoeiro - PE"="#00EECC", "Exp.Limoeiro - PE"="#00CFCF"
+)
+
+
+for (coln in c("vocab")) {
+  color[[paste0(coln,".quintile")]] = c("#BF0040","#FF0000","#800080","#0000FF","#4000BF")
+  level[[paste0(coln,".quintile")]] = c("1st quintile","2nd quintile","3rd quintile","4th quintile","5th quintile")
+  color[[paste0("grupo:",coln,".quintile")]] = c(
+    "Experimental.1st quintile"="#BF0040", "Controle.1st quintile"="#d8668c",
+    "Experimental.2nd quintile"="#FF0000", "Controle.2nd quintile"="#ff7f7f",
+    "Experimental.3rd quintile"="#8fce00", "Controle.3rd quintile"="#ddf0b2",
+    "Experimental.4th quintile"="#0000FF", "Controle.4th quintile"="#b2b2ff",
+    "Experimental.5th quintile"="#4000BF", "Controle.5th quintile"="#b299e5",
+    
+    "Experimental:1st quintile"="#BF0040", "Controle:1st quintile"="#d8668c",
+    "Experimental:2nd quintile"="#FF0000", "Controle:2nd quintile"="#ff7f7f",
+    "Experimental:3rd quintile"="#8fce00", "Controle:3rd quintile"="#ddf0b2",
+    "Experimental:4th quintile"="#0000FF", "Controle:4th quintile"="#b2b2ff",
+    "Experimental:5th quintile"="#4000BF", "Controle:5th quintile"="#b299e5")
+}
+
+
+gdat <- read_excel("../data/data.xlsx", sheet = "data")
+gdat <- gdat[!is.na(gdat[[dv.pre]]) & !is.na(gdat[[dv.pos]]),]
+
+{{ dat.filter }}
+
+dat <- gdat
+dat$Group <- factor(dat[["Group"]], level[["Group"]])
+for (coln in c(names(lfatores))) {
+  dat[[coln]] <- factor(dat[[coln]], level[[coln]][level[[coln]] %in% unique(dat[[coln]])])
+}
+dat <- dat[,c("ID", names(lfatores), dv.pre, dv.pos)]
+
+dat.long <- rbind(dat, dat)
+dat.long$time <- c(rep("pre", nrow(dat)), rep("pos", nrow(dat)))
+dat.long$time <- factor(dat.long$time, c("pre","pos"))
+dat.long[[dv]] <- c(dat[[dv.pre]], dat[[dv.pos]])
+
+
+for (f in c("Group", names(lfatores))) {
+  if (is.null(color[[f]]) && length(unique(dat[[f]])) > 0) 
+      color[[f]] <- distinctColorPalette(length(unique(dat[[f]])))
+}
+
+for (f in c(fatores2)) {
+  if (is.null(color[[paste0("Group:",f)]]) && length(unique(dat[[f]])) > 0)
+    color[[paste0("Group:",f)]] <- distinctColorPalette(
+      length(unique(dat[["Group"]]))*length(unique(dat[[f]])))
+}
+
+ldat <- list()
+laov <- list()
+lpwc <- list()
+lemms <- list()
+```
+
+# Descriptive Statistics of Initial Data
+
+```{r}
+df <- get.descriptives(dat, c(dv.pre, dv.pos), c("Group"),
+                       symmetry.test = T, normality.test = F)
+df <- plyr::rbind.fill(
+  df, do.call(plyr::rbind.fill, lapply(lfatores2, FUN = function(f) {
+    if (nrow(dat) > 0 && sum(!is.na(unique(dat[[f]]))) > 1)
+      get.descriptives(dat, c(dv.pre,dv.pos), c("Group", f), include.global = F,
+                       symmetry.test = T, normality.test = F)
+    }))
+)
+df <- df[,c(fatores1[fatores1 %in% colnames(df)],"variable",
+            colnames(df)[!colnames(df) %in% c(fatores1,"variable")])]
+```
+
+
+```{r, echo=FALSE, purl=FALSE}
+kable(df, digits = 3)
+```
+

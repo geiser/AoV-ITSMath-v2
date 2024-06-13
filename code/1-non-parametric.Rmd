@@ -1,0 +1,756 @@
+---
+title: "R Notebook for non-parametric analysis"
+author: Geiser C. Challco <geiser@alumni.usp.br>
+comment: Author - Geiser C. Challco <geiser@alumni.usp.br>
+         
+         This code is distributed in the hope that it will be useful,
+         but WITHOUT ANY WARRANTY; without even the implied warranty of
+         MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+         GNU General Public License for more details.
+         
+         You should have received a copy of the GNU General Public License.
+         If not, see <https://www.gnu.org/licenses/>.
+output:
+  word_document:
+    toc: true
+  html_document:
+    toc: true
+  github_document:
+    toc: true
+fontsize: 10pt
+---
+
+## Install and Load Packages
+
+```{r include=FALSE}
+if (!'remotes' %in% rownames(installed.packages())) install.packages('remotes')
+if (!"rshinystatistics" %in% rownames(installed.packages())) {
+  remotes::install_github("geiser/rshinystatistics")
+} else if (packageVersion("rshinystatistics") < "0.0.0.9900") {
+  remotes::install_github("geiser/rshinystatistics")
+}
+
+wants <- c('readxl','dplyr','rstatix','ggplot2','ggpubr','ggpp')
+has <- wants %in% rownames(installed.packages())
+if (any(!has)) install.packages(wants[!has])
+if (!"dmetar" %in% rownames(installed.packages())) {
+  remotes::install_github("MathiasHarrer/dmetar")
+}
+
+library(rshinystatistics)
+
+library(readxl)
+library(plyr)
+library(dplyr)
+library(rstatix)
+library(ggplot2)
+library(ggpubr)
+library(ggpp)
+library(tidyr)
+
+dat <- read_excel("../data/data.xlsx", sheet = "data")
+
+dat$Group <- factor(dat$Group, c("Ctr.A","Ctr.B","Exp"))
+
+dat <- dat[!is.na(dat$pre.score) & !is.na(dat$pos.score),]
+
+```
+
+## Identify the best pre-test and post-test regression
+
+**Legend**:
+
+-   *irt.cc*: estimated ability using concurrent calibration (fixing IRT parameters)
+-   *irt.em.norm*: estimated ability using equation mode and normalizing these values - IRT parameters are calculated based on previous and current data
+
+
+```{r}
+values = c("score","irt.cc","irt.em.norm")
+lvalues = as.list(values); names(lvalues) = values
+
+do.call(rbind, lapply(lvalues, FUN = function(x) {
+  md = summary(lm(as.formula(paste0("pos.",x,"~","pre.",x)), data = dat))
+  cbind(md$coefficients, `R2` = md$r.squared, `SSR` = sum(md$residuals^2))
+}))
+```
+
+**Normality test** 
+
+```{r}
+(do.call(rbind, lapply(c(paste0("pre.",values),paste0("pos.",values)), FUN = function(x) {
+  cbind(var=x, rshinystatistics::normality.test(dat[[x]]))
+})))
+```
+
+
+
+**Note**: Based the linear regression "Y = a + bX," the best measure that should be used to compare pre- and post-test data is "irt.em.norm".
+
+```{r}
+ggscatter(dat, x = "pre.score", y = "pos.score", size = 1, add = "reg.line") +
+  stat_regline_equation(
+    aes(label =  paste(..eq.label.., ..rr.label.., sep = "~~~~"))
+  )
+```
+
+```{r}
+ggscatter(dat, x = "pre.irt.cc", y = "pos.irt.cc", size = 1, add = "reg.line") +
+  stat_regline_equation(
+    aes(label =  paste(..eq.label.., ..rr.label.., sep = "~~~~"))
+  )
+```
+
+
+```{r}
+ggscatter(dat, x = "pre.irt.em.norm", y = "pos.irt.em.norm", size = 1, add = "reg.line") +
+  stat_regline_equation(
+    aes(label =  paste(..eq.label.., ..rr.label.., sep = "~~~~"))
+  )
+```
+
+```{r}
+values = c("score","irt.em.norm")
+lvalues = as.list(values); names(lvalues) = values
+```
+
+
+## Evaluating H1a (null)
+
+H1a (null): Students who participated in scenarios without our proposed ITS and without training (control group A) have the same mean score/ability in both the pre-test and post-test. **Note**: *Limoeiro - PE*
+
+```{r include=FALSE}
+sdat = dat[which(dat$Group == "Ctr.A"),]
+
+wlx.md <- lapply(lvalues, FUN = function(x) {
+  pdat <- tidyr::pivot_longer(sdat[,c("ID",paste0("pre.",x),paste0("pos.",x))],
+                              cols = ends_with(x), names_to = "time")
+  add_significance(wilcox_test(pdat, value ~ time, paired = T, alternative = "greater", detailed = T))
+})
+
+df = do.call(rbind, wlx.md)
+(df = df[,c("group1","group2","n1","n2","estimate","statistic","p","p.signif")])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+```{r include=FALSE}
+df <- lapply(lvalues, FUN = function(x) {
+  df = pivot_longer(sdat, cols = c(paste0("pre.",x), paste0("pos.",x)),
+                    names_to = "time")
+  df$time = factor(df$time, c(paste0("pre.",x), paste0("pos.",x)))
+  df
+})
+
+df.sum <- lapply(lvalues, FUN = function(x) {
+  get_summary_stats(group_by(df[[x]],time)[,c("time","value")])
+})
+(do.call(rbind, df.sum))
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(do.call(rbind, df.sum))
+```
+
+```{r include=FALSE}
+plots <- lapply(lvalues, FUN = function(x) {
+  df[[x]]$xj <- jitter(as.numeric(df[[x]]$time), amount=.1)
+  df[[x]]$yj <- jitter(df[[x]]$value, amount = .01)
+  
+  pwc <- add_xy_position(wlx.md[[x]], fun = "mean_ci", step.increase=3.5)
+
+  ggline(df.sum[[x]], x="time", y="mean", palette="jco", size=0.75) +
+    geom_errorbar(aes_string(ymin="mean-ci", ymax="mean+ci"), width=0.1, size = 1) +
+    geom_point(data = df[[x]], aes_string(x="xj",y="yj",colour="time"), size = 0.75) +
+    geom_line(data = df[[x]], aes(x=xj, y =yj, group=ID), color = "gray", size = 0.25) +
+    stat_pvalue_manual(pwc, hide.ns = F, label = "p = {p}") +
+    ylab(paste0(x, "(ability)")) + xlab("")
+})
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$score
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.em.norm
+```
+
+
+
+
+## Evaluating H1b (null)
+
+H1b (null): Students who participated in scenarios without our proposed ITS and with training (control group B) have the same mean score/ability in both the pre-test and post-test.
+
+```{r include=FALSE}
+sdat = dat[which(dat$Group == "Ctr.B"),]
+
+wlx.md <- lapply(lvalues, FUN = function(x) {
+  pdat <- tidyr::pivot_longer(sdat[,c("ID",paste0("pre.",x),paste0("pos.",x))],
+                              cols = ends_with(x), names_to = "time")
+  add_significance(wilcox_test(pdat, value ~ time, paired = T, alternative = "greater", detailed = T))
+})
+
+df = do.call(rbind, wlx.md)
+(df = df[,c("group1","group2","n1","n2","estimate","statistic","p","p.signif")])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+```{r include=FALSE}
+df <- lapply(lvalues, FUN = function(x) {
+  df = pivot_longer(sdat, cols = c(paste0("pre.",x), paste0("pos.",x)),
+                    names_to = "time")
+  df$time = factor(df$time, c(paste0("pre.",x), paste0("pos.",x)))
+  df
+})
+
+df.sum <- lapply(lvalues, FUN = function(x) {
+  get_summary_stats(group_by(df[[x]],time)[,c("time","value")])
+})
+(do.call(rbind, df.sum))
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(do.call(rbind, df.sum))
+```
+
+```{r include=FALSE}
+plots <- lapply(lvalues, FUN = function(x) {
+  df[[x]]$xj <- jitter(as.numeric(df[[x]]$time), amount=.1)
+  df[[x]]$yj <- jitter(df[[x]]$value, amount = .01)
+  
+  pwc <- add_xy_position(wlx.md[[x]], fun = "mean_ci", step.increase=3.5)
+
+  ggline(df.sum[[x]], x="time", y="mean", palette="jco", size=0.75) +
+    geom_errorbar(aes_string(ymin="mean-ci", ymax="mean+ci"), width=0.1, size = 1) +
+    geom_point(data = df[[x]], aes_string(x="xj",y="yj",colour="time"), size = 0.75) +
+    geom_line(data = df[[x]], aes(x=xj, y =yj, group=ID), color = "gray", size = 0.25) +
+    stat_pvalue_manual(pwc, hide.ns = F, label = "p = {p}") +
+    ylab(paste0(x, "(ability)")) + xlab("")
+})
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$score
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.em.norm
+```
+
+
+
+### Sorocaba - SP :: Evaluating H1b (null)
+
+```{r include=FALSE}
+sdat = dat[which(dat$Group == "Ctr.B" & dat$Town == "Sorocaba - SP"),]
+
+wlx.md <- lapply(lvalues, FUN = function(x) {
+  pdat <- tidyr::pivot_longer(sdat[,c("ID",paste0("pre.",x),paste0("pos.",x))],
+                              cols = ends_with(x), names_to = "time")
+  add_significance(wilcox_test(pdat, value ~ time, paired = T,
+                               alternative = "greater", detailed = T))
+})
+
+df = do.call(rbind, wlx.md)
+(df = df[,c("group1","group2","n1","n2","estimate","statistic","p","p.signif")])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+```{r include=FALSE}
+df <- lapply(lvalues, FUN = function(x) {
+  df = pivot_longer(sdat, cols = c(paste0("pre.",x), paste0("pos.",x)), names_to = "time")
+  df$time = factor(df$time, c(paste0("pre.",x), paste0("pos.",x)))
+  df
+})
+
+df.sum <- lapply(lvalues, FUN = function(x) {
+  get_summary_stats(group_by(df[[x]],time)[,c("time","value")])
+})
+(do.call(rbind, df.sum))
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(do.call(rbind, df.sum))
+```
+
+```{r include=FALSE}
+plots <- lapply(lvalues, FUN = function(x) {
+  df[[x]]$xj <- jitter(as.numeric(df[[x]]$time), amount=.1)
+  df[[x]]$yj <- jitter(df[[x]]$value, amount = .01)
+  
+  pwc <- add_xy_position(wlx.md[[x]], fun = "mean_ci", step.increase=3.5)
+
+  ggline(df.sum[[x]], x="time", y="mean", palette="jco", size=0.75) +
+    geom_errorbar(aes_string(ymin="mean-ci", ymax="mean+ci"), width=0.1, size = 1) +
+    geom_point(data = df[[x]], aes_string(x="xj",y="yj",colour="time"), size = 0.75) +
+    geom_line(data = df[[x]], aes(x=xj, y =yj, group=ID), color = "gray", size = 0.25) +
+    stat_pvalue_manual(pwc, hide.ns = F, label = "p = {p}") +
+    ylab(paste0(x, "(ability)")) + xlab("")
+})
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$score
+```
+
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.em.norm
+```
+
+
+### Limoeiro - PE :: Evaluating H1b (null)
+
+```{r include=FALSE}
+sdat = dat[which(dat$Group == "Ctr.B" & dat$Town == "Limoeiro - PE"),]
+
+wlx.md <- lapply(lvalues, FUN = function(x) {
+  pdat <- tidyr::pivot_longer(sdat[,c("ID",paste0("pre.",x),paste0("pos.",x))],
+                              cols = ends_with(x), names_to = "time")
+  add_significance(wilcox_test(pdat, value ~ time, paired = T,
+                               alternative = "greater", detailed = T))
+})
+
+df = do.call(rbind, wlx.md)
+(df = df[,c("group1","group2","n1","n2","estimate","statistic","p","p.signif")])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+```{r include=FALSE}
+df <- lapply(lvalues, FUN = function(x) {
+  df = pivot_longer(sdat, cols = c(paste0("pre.",x), paste0("pos.",x)),
+                    names_to = "time")
+  df$time = factor(df$time, c(paste0("pre.",x), paste0("pos.",x)))
+  df
+})
+
+df.sum <- lapply(lvalues, FUN = function(x) {
+  get_summary_stats(group_by(df[[x]],time)[,c("time","value")])
+})
+(do.call(rbind, df.sum))
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(do.call(rbind, df.sum))
+```
+
+```{r include=FALSE}
+plots <- lapply(lvalues, FUN = function(x) {
+  df[[x]]$xj <- jitter(as.numeric(df[[x]]$time), amount=.1)
+  df[[x]]$yj <- jitter(df[[x]]$value, amount = .01)
+  
+  pwc <- add_xy_position(wlx.md[[x]], fun = "mean_ci", step.increase=3.5)
+
+  ggline(df.sum[[x]], x="time", y="mean", palette="jco", size=0.75) +
+    geom_errorbar(aes_string(ymin="mean-ci", ymax="mean+ci"), width=0.1, size = 1) +
+    geom_point(data = df[[x]], aes_string(x="xj",y="yj",colour="time"), size = 0.75) +
+    geom_line(data = df[[x]], aes(x=xj, y =yj, group=ID), color = "gray", size = 0.25) +
+    stat_pvalue_manual(pwc, hide.ns = F, label = "p = {p}") +
+    ylab(paste0(x, "(ability)")) + xlab("")
+})
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$score
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.em.norm
+```
+
+
+## Evaluating H2 (null)
+
+H2 (null): Students who participated in scenarios with our proposed ITS and with training (experimental group) have the same mean score/ability in both the pre-test and post-test.
+
+
+```{r include=FALSE}
+sdat = dat[which(dat$Group == "Exp"),]
+
+wlx.md <- lapply(lvalues, FUN = function(x) {
+  pdat <- tidyr::pivot_longer(sdat[,c("ID",paste0("pre.",x),paste0("pos.",x))],
+                              cols = ends_with(x), names_to = "time")
+  add_significance(wilcox_test(pdat, value ~ time, paired = T,
+                               alternative = "greater", detailed = T))
+})
+
+df = do.call(rbind, wlx.md)
+(df = df[,c("group1","group2","n1","n2","estimate","statistic","p","p.signif")])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+```{r include=FALSE}
+df <- lapply(lvalues, FUN = function(x) {
+  df = pivot_longer(sdat, cols = c(paste0("pre.",x), paste0("pos.",x)),
+                    names_to = "time")
+  df$time = factor(df$time, c(paste0("pre.",x), paste0("pos.",x)))
+  df
+})
+
+df.sum <- lapply(lvalues, FUN = function(x) {
+  get_summary_stats(group_by(df[[x]],time)[,c("time","value")])
+})
+(do.call(rbind, df.sum))
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(do.call(rbind, df.sum))
+```
+
+```{r include=FALSE}
+plots <- lapply(lvalues, FUN = function(x) {
+  df[[x]]$xj <- jitter(as.numeric(df[[x]]$time), amount=.1)
+  df[[x]]$yj <- jitter(df[[x]]$value, amount = .01)
+  
+  pwc <- add_xy_position(wlx.md[[x]], fun = "mean_ci", step.increase=3.5)
+
+  ggline(df.sum[[x]], x="time", y="mean", palette="jco", size=0.75) +
+    geom_errorbar(aes_string(ymin="mean-ci", ymax="mean+ci"), width=0.1, size = 1) +
+    geom_point(data = df[[x]], aes_string(x="xj",y="yj",colour="time"), size = 0.75) +
+    geom_line(data = df[[x]], aes(x=xj, y =yj, group=ID), color = "gray", size = 0.25) +
+    stat_pvalue_manual(pwc, hide.ns = F, label = "p = {p}") +
+    ylab(paste0(x, "(ability)")) + xlab("")
+})
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$score
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.em.norm
+```
+
+### Sorocaba - SP :: Evaluating H2 (null)
+
+
+```{r include=FALSE}
+sdat = dat[which(dat$Group == "Exp" & dat$Town == "Sorocaba - SP"),]
+
+wlx.md <- lapply(lvalues, FUN = function(x) {
+  pdat <- tidyr::pivot_longer(sdat[,c("ID",paste0("pre.",x),paste0("pos.",x))],
+                              cols = ends_with(x), names_to = "time")
+  add_significance(wilcox_test(pdat, value ~ time, paired = T,
+                               alternative = "greater", detailed = T))
+})
+
+df = do.call(rbind, wlx.md)
+(df = df[,c("group1","group2","n1","n2","estimate","statistic","p","p.signif")])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+```{r include=FALSE}
+df <- lapply(lvalues, FUN = function(x) {
+  df = pivot_longer(sdat, cols = c(paste0("pre.",x), paste0("pos.",x)),
+                    names_to = "time")
+  df$time = factor(df$time, c(paste0("pre.",x), paste0("pos.",x)))
+  df
+})
+
+df.sum <- lapply(lvalues, FUN = function(x) {
+  get_summary_stats(group_by(df[[x]],time)[,c("time","value")])
+})
+(do.call(rbind, df.sum))
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(do.call(rbind, df.sum))
+```
+
+```{r include=FALSE}
+plots <- lapply(lvalues, FUN = function(x) {
+  df[[x]]$xj <- jitter(as.numeric(df[[x]]$time), amount=.1)
+  df[[x]]$yj <- jitter(df[[x]]$value, amount = .01)
+  
+  pwc <- add_xy_position(wlx.md[[x]], fun = "mean_ci", step.increase=3.5)
+
+  ggline(df.sum[[x]], x="time", y="mean", palette="jco", size=0.75) +
+    geom_errorbar(aes_string(ymin="mean-ci", ymax="mean+ci"), width=0.1, size = 1) +
+    geom_point(data = df[[x]], aes_string(x="xj",y="yj",colour="time"), size = 0.75) +
+    geom_line(data = df[[x]], aes(x=xj, y =yj, group=ID), color = "gray", size = 0.25) +
+    stat_pvalue_manual(pwc, hide.ns = F, label = "p = {p}") +
+    ylab(paste0(x, "(ability)")) + xlab("")
+})
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$score
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.em.norm
+```
+
+
+
+### Limoeiro - PE :: Evaluating H2 (null)
+
+
+```{r include=FALSE}
+sdat = dat[which(dat$Group == "Exp" & dat$Town == "Limoeiro - PE"),]
+
+wlx.md <- lapply(lvalues, FUN = function(x) {
+  pdat <- tidyr::pivot_longer(sdat[,c("ID",paste0("pre.",x),paste0("pos.",x))],
+                              cols = ends_with(x), names_to = "time")
+  add_significance(wilcox_test(pdat, value ~ time, paired = T,
+                               alternative = "greater", detailed = T))
+})
+
+df = do.call(rbind, wlx.md)
+(df = df[,c("group1","group2","n1","n2","estimate","statistic","p","p.signif")])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+```{r include=FALSE}
+df <- lapply(lvalues, FUN = function(x) {
+  df = pivot_longer(sdat, cols = c(paste0("pre.",x), paste0("pos.",x)),
+                    names_to = "time")
+  df$time = factor(df$time, c(paste0("pre.",x), paste0("pos.",x)))
+  df
+})
+
+df.sum <- lapply(lvalues, FUN = function(x) {
+  get_summary_stats(group_by(df[[x]],time)[,c("time","value")])
+})
+(do.call(rbind, df.sum))
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(do.call(rbind, df.sum))
+```
+
+```{r include=FALSE}
+plots <- lapply(lvalues, FUN = function(x) {
+  df[[x]]$xj <- jitter(as.numeric(df[[x]]$time), amount=.1)
+  df[[x]]$yj <- jitter(df[[x]]$value, amount = .01)
+  
+  pwc <- add_xy_position(wlx.md[[x]], fun = "mean_ci", step.increase=3.5)
+
+  ggline(df.sum[[x]], x="time", y="mean", palette="jco", size=0.75) +
+    geom_errorbar(aes_string(ymin="mean-ci", ymax="mean+ci"), width=0.1, size = 1) +
+    geom_point(data = df[[x]], aes_string(x="xj",y="yj",colour="time"), size = 0.75) +
+    geom_line(data = df[[x]], aes(x=xj, y =yj, group=ID), color = "gray", size = 0.25) +
+    stat_pvalue_manual(pwc, hide.ns = F, label = "p = {p}") +
+    ylab(paste0(x, "(ability)")) + xlab("")
+})
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$score
+```
+
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.em.norm
+```
+
+
+## Evaluating H3 (null)
+
+H3 (null): Students who participated in scenarios with our proposed ITS and with training (experimental group) have the same learning gain that students who participated in control groups.
+
+
+
+```{r include=FALSE}
+sdat = dat
+kru.md <- lapply(lvalues, FUN = function(x) {
+  kruskal.test(sdat, paste0("dif.",x), "Group")
+})
+
+df = do.call(rbind, lapply(kru.md, get.kruskal.table))
+(df = df[,c("var","n","df","statistic","p","p.signif")])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+```{r include=FALSE}
+pwc.md <- lapply(lvalues, FUN = function(x) {
+  kruskal.pwc(sdat, paste0("dif.",x), "Group")
+})
+
+df = do.call(rbind, lapply(pwc.md, get.kruskal.pwc.table))
+(df = df[,c("var","group1","group2","n1","n2","estimate","statistic","p.adj","p.adj.signif")])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+
+```{r include=FALSE}
+plots <- lapply(lvalues, FUN = function(x) {
+  stat.test <- pwc.md[[x]][[paste0("dif.",x)]]$Group %>% add_xy_position(x = "Group")
+  ggboxplot(sdat, x = "Group", y = paste0("dif.",x),
+            color = "Group", palette = c("#E7B800","#E799AA","#00AA55"),
+            add = "jitter") +
+    stat_pvalue_manual(stat.test, tip.length = 0, hide.ns = T) +
+    ylab(paste0(x, "(dif)")) + xlab("") +
+    labs(subtitle = get_test_label(kru.md[[x]][[paste0("dif.",x)]]$kt, detailed = T))
+})
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$score
+```
+
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.em.norm
+```
+
+### Subgroup analysis for Group:Town
+
+
+```{r include=FALSE}
+sdat = dat
+sch.md <- lapply(lvalues, FUN = function(x) {
+  scheirer.test(sdat, paste0("dif.",x), c("Group","Town"))
+})
+
+(df = do.call(rbind, lapply(sch.md, get.scheirer.table)))
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+
+```{r include=FALSE}
+sdat = dat
+pwc.md <- lapply(lvalues, FUN = function(x) {
+  scheirer.pwc(sdat, paste0("dif.",x), between = c("Group","Town"))
+})
+
+df = do.call(rbind, lapply(pwc.md, get.scheirer.pwc.table))
+(df = df[,c("var","Town","group1","group2","n1","n2","estimate","statistic","p.adj","p.adj.signif")])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+
+```{r include=FALSE}
+plots <- lapply(lvalues, FUN = function(x) {
+  sch <- sch.md[[x]][[paste0("dif.",x)]]
+  pwc <- pwc.md[[x]][[paste0("dif.",x)]]
+  stat.test <-   pwc$Group %>% add_xy_position(x = "Group")
+  
+  ggboxplot(sdat, x = "Group", y = paste0("dif.",x),
+            color = "Town", palette = c("#E700B8","#5500AA"),
+            add = "jitter") +
+    stat_pvalue_manual(stat.test, tip.length = 0, hide.ns = T) +
+    ylab(paste0(x, "(dif)")) + xlab("")
+})
+
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$score
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.em.norm
+```
+
+
+
+
+### Subgroup analysis for Group:Quintiles
+
+
+```{r include=FALSE}
+sdat = dat
+sch.md <- lapply(lvalues, FUN = function(x) {
+  scheirer.test(sdat, paste0("dif.",x), c("Group", paste0("qtl.",x)))
+})
+
+(df = do.call(rbind, lapply(sch.md, get.scheirer.table)))
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+
+```{r include=FALSE}
+sdat = dat
+pwc.md <- lapply(lvalues, FUN = function(x) {
+  scheirer.pwc(sdat, paste0("dif.",x), between = c("Group",paste0("qtl.",x)))
+})
+
+df = do.call(rbind.fill, lapply(pwc.md, get.scheirer.pwc.table))
+(df = df[,c(".y.","Group","group1","group2","n1","n2","estimate","statistic","p.adj","p.adj.signif")])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+
+```{r include=FALSE}
+plots <- lapply(lvalues, FUN = function(x) {
+  sch <- sch.md[[x]][[paste0("dif.",x)]]
+  pwc <- pwc.md[[x]][[paste0("dif.",x)]]
+  stat.test <- pwc[[paste0("qtl.",x)]] %>% add_xy_position(x = "Group")
+  
+  ggboxplot(sdat, x = "Group", y = paste0("dif.",x),
+            color = paste0("qtl.",x), palette = "jco") +
+    stat_pvalue_manual(stat.test, tip.length = 0, hide.ns = T) +
+    ylab(paste0(x, "(dif)")) + xlab("")
+})
+
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$score
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.em.norm
+```
+
+

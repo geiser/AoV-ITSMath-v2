@@ -1,0 +1,571 @@
+---
+title: "R Notebook for parametric analysis"
+author: Geiser C. Challco <geiser@alumni.usp.br>
+comment: Author - Geiser C. Challco <geiser@alumni.usp.br>
+         
+         This code is distributed in the hope that it will be useful,
+         but WITHOUT ANY WARRANTY; without even the implied warranty of
+         MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+         GNU General Public License for more details.
+         
+         You should have received a copy of the GNU General Public License.
+         If not, see <https://www.gnu.org/licenses/>.
+output:
+  word_document:
+    toc: true
+  html_document:
+    toc: true
+  github_document:
+    toc: true
+fontsize: 10pt
+---
+
+## Install and Load Packages
+
+```{r include=FALSE}
+if (!'remotes' %in% rownames(installed.packages())) install.packages('remotes')
+if (!"rshinystatistics" %in% rownames(installed.packages())) {
+  remotes::install_github("geiser/rshinystatistics")
+} else if (packageVersion("rshinystatistics") < "0.0.0.9900") {
+  remotes::install_github("geiser/rshinystatistics")
+}
+
+wants <- c('readxl','dplyr','rstatix','ggplot2','ggpubr','ggpp')
+has <- wants %in% rownames(installed.packages())
+if (any(!has)) install.packages(wants[!has])
+if (!"dmetar" %in% rownames(installed.packages())) {
+  remotes::install_github("MathiasHarrer/dmetar")
+}
+
+library(rshinystatistics)
+
+library(readxl)
+library(dplyr)
+library(rstatix)
+library(ggplot2)
+library(ggpubr)
+library(ggpp)
+library(tidyr)
+
+dat <- read_excel("../data/data.xlsx", sheet = "data")
+
+dat$Group <- factor(dat$Group, c("Ctr.A","Ctr.B","Exp"))
+
+dat <- dat[!is.na(dat$pre.score) & !is.na(dat$pos.score),]
+
+values = c("score","irt.cc","irt.em.norm")
+lvalues = as.list(values); names(lvalues) = values
+
+for (x in names(lvalues))
+  dat[[paste0("dif.",x)]] <- dat[[paste0("pos.",x)]] - dat[[paste0("pre.",x)]]
+```
+
+
+**Legend**:
+
+-   *irt.cc*: estimated ability using concurrent calibration (fixing IRT parameters)
+-   *irt.em.norm*: estimated ability using equation mode and normalizing these values - IRT parameters are calculated based on previous and current data
+
+
+## Evaluating H1a (null)
+
+H1a (null): Students who participated in scenarios without our proposed ITS and with out training (control group A) have the same mean score/ability in both the pre-test and post-test.
+
+### Removing outliers and non-normal data
+
+```{r include=FALSE}
+sdat = dat[which(dat$Group == "Ctr.A"),]
+
+outliers <- lapply(lvalues, FUN = function(x) {
+  identify_outliers(sdat, paste0("dif.",x))
+})
+
+non.normals <- lapply(lvalues, FUN = function(x) {
+  idx = which(!sdat$ID %in% outliers[[x]]$ID)
+  c(getNonNormal(sdat[[paste0("dif.",x)]][idx], sdat$ID[idx]), outliers[[x]]$ID)
+})
+```
+
+```{r}
+(non.normals)
+```
+
+```{r include=FALSE}
+ndat <- lapply(lvalues, FUN = function(x) {
+  sdat[which(!sdat$ID %in% non.normals[[x]]),]
+})
+
+(df <- do.call(rbind, lapply(lvalues, FUN = function(x) {
+  normality.test.at(ndat[[x]], paste0("dif.",x))
+})))
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+### Performing paired t-test
+
+```{r include=FALSE}
+ttest.md <- lapply(lvalues, FUN = function(x) {
+  pdat <- tidyr::pivot_longer(ndat[[x]][,c("ID",paste0("pre.",x),paste0("pos.",x))],
+                              cols = ends_with(x), names_to = "time")
+  add_significance(t_test(pdat, value ~ time, paired = T, alternative = "greater", detailed = T))
+})
+
+df = do.call(rbind, ttest.md)
+(df = df[,c("group1","group2","n1","n2","estimate","statistic","p","p.signif")])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+```{r include=FALSE}
+df <- lapply(lvalues, FUN = function(x) {
+  df = pivot_longer(ndat[[x]], cols = c(paste0("pre.",x), paste0("pos.",x)),
+                    names_to = "time")
+  df$time = factor(df$time, c(paste0("pre.",x), paste0("pos.",x)))
+  df
+})
+
+df.sum <- lapply(lvalues, FUN = function(x) {
+  get_summary_stats(group_by(df[[x]],time)[,c("time","value")])
+})
+(do.call(rbind, df.sum))
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(do.call(rbind, df.sum))
+```
+
+
+### Plotting results
+
+```{r include=FALSE}
+plots <- lapply(lvalues, FUN = function(x) {
+  df[[x]]$xj <- jitter(as.numeric(df[[x]]$time), amount=.1)
+  df[[x]]$yj <- jitter(df[[x]]$value, amount = .01)
+  
+  pwc <- add_xy_position(ttest.md[[x]], fun = "mean_ci", step.increase=3.5)
+
+  ggline(df.sum[[x]], x="time", y="mean", palette="jco", size=0.75) +
+    geom_errorbar(aes_string(ymin="mean-ci", ymax="mean+ci"), width=0.1, size = 1) +
+    geom_point(data = df[[x]], aes_string(x="xj",y="yj",colour="time"), size = 0.75) +
+    geom_line(data = df[[x]], aes(x=xj, y =yj, group=ID), color = "gray", size = 0.25) +
+    stat_pvalue_manual(pwc, hide.ns = F, label = "p = {p}") +
+    ylab(paste0(x, "(ability)")) + xlab("")
+})
+```
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$score
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.cc
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.em.norm
+```
+
+## Evaluating H2 (null)
+
+H2 (null): Students who participated in scenarios with our proposed ITS and with training (experimental group) have the same mean score/ability in both the pre-test and post-test.
+
+
+### Removing outliers and non-normal data
+
+```{r include=FALSE}
+sdat = dat[which(dat$Group == "with.ITS"),]
+
+outliers <- lapply(lvalues, FUN = function(x) {
+  identify_outliers(sdat, paste0("dif.",x))
+})
+
+non.normals <- lapply(lvalues, FUN = function(x) {
+  idx = which(!sdat$ID %in% outliers[[x]]$ID)
+  c(getNonNormal(sdat[[paste0("dif.",x)]][idx], sdat$ID[idx]), outliers[[x]]$ID)
+})
+```
+
+```{r}
+(non.normals)
+```
+```{r include=FALSE}
+ndat <- lapply(lvalues, FUN = function(x) {
+  sdat[which(!sdat$ID %in% non.normals[[x]]),]
+})
+
+(df <- do.call(rbind, lapply(lvalues, FUN = function(x) {
+  normality.test.at(ndat[[x]], paste0("dif.",x))
+})))
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+### Performing paired t-test
+
+```{r include=FALSE}
+ttest.md <- lapply(lvalues, FUN = function(x) {
+  pdat <- tidyr::pivot_longer(ndat[[x]][,c("ID",paste0("pre.",x),paste0("pos.",x))],
+                              cols = ends_with(x), names_to = "time")
+  add_significance(t_test(pdat, value ~ time, paired = T, alternative = "greater", detailed = T))
+})
+
+df = do.call(rbind, ttest.md)
+(df = df[,c("group1","group2","n1","n2","estimate","statistic","p","p.signif")])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+```{r include=FALSE}
+df <- lapply(lvalues, FUN = function(x) {
+  df = pivot_longer(ndat[[x]], cols = c(paste0("pre.",x), paste0("pos.",x)),
+                    names_to = "time")
+  df$time = factor(df$time, c(paste0("pre.",x), paste0("pos.",x)))
+  df
+})
+
+df.sum <- lapply(lvalues, FUN = function(x) {
+  get_summary_stats(group_by(df[[x]],time)[,c("time","value")])
+})
+(do.call(rbind, df.sum))
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(do.call(rbind, df.sum))
+```
+
+### Plotting results
+
+
+```{r include=FALSE}
+plots <- lapply(lvalues, FUN = function(x) {
+  df[[x]]$xj <- jitter(as.numeric(df[[x]]$time), amount=.1)
+  df[[x]]$yj <- jitter(df[[x]]$value, amount = .01)
+  
+  pwc <- add_xy_position(ttest.md[[x]], fun = "mean_ci", step.increase=3.5)
+
+  ggline(df.sum[[x]], x="time", y="mean", palette="jco", size=0.75) +
+    geom_errorbar(aes_string(ymin="mean-ci", ymax="mean+ci"), width=0.1, size = 1) +
+    geom_point(data = df[[x]], aes_string(x="xj",y="yj",colour="time"), size = 0.75) +
+    geom_line(data = df[[x]], aes(x=xj, y =yj, group=ID), color = "gray", size = 0.25) +
+    stat_pvalue_manual(pwc, hide.ns = F, label = "p = {p}") +
+    ylab(paste0(x, "(ability)")) + xlab("")
+})
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$score
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.cc
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.em.norm
+```
+
+
+
+
+## Evaluating H3 (null)
+
+H3 (null): Students who participated in scenarios with our proposed ITS and with training (experimental group) have the same learning outcomes that students who participated in scenarios without our proposed ITS and with training (control group), controlling the pre-level of knowledge before to participate in the scenarios.
+
+
+### Removing outliers and non-normal data
+
+```{r include=FALSE}
+lm.mdls <- lapply(lvalues, FUN = function(x) {
+  mdl <- lm(as.formula(paste0("pos.",x," ~ pre.",x," + Group")), data = dat)
+  cbind(ID = dat$ID, augment(mdl))  
+})
+
+outliers <- lapply(lvalues, FUN = function(x) {
+  lm.mdls[[x]]$ID[which(abs(lm.mdls[[x]][[".std.resid"]]) > 3)]
+})
+
+non.normals <- lapply(lvalues, FUN = function(x) {
+  idx = which(!dat$ID %in% outliers[[x]])
+  c(getNonNormal(lm.mdls[[x]]$.std.resid[idx], lm.mdls[[x]]$ID[idx]))
+})
+```
+
+```{r}
+(outliers)
+```
+
+```{r}
+(non.normals)
+```
+**Note**: because there is a high number of data which cause non.normality, then we decided to remove only ouliers.
+
+
+### Performing ANCOVA test (removing outliers)
+
+```{r include=FALSE}
+ndat <- lapply(lvalues, FUN = function(x) {
+  dat[which(!dat$ID %in% outliers[[x]]),]
+})
+
+(df <- do.call(rbind, lapply(lvalues, FUN = function(x) {
+  mdl <- lm(as.formula(paste0("pos.",x," ~ pre.",x," + Group")),data=ndat[[x]])
+  mdl <- cbind(ID = ndat[[x]]$ID, augment(mdl))
+  normality.test(mdl[[".std.resid"]])
+})))
+```
+
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+
+```{r include=FALSE}
+aov.md <- lapply(lvalues, FUN = function(x) {
+  anova_test(ndat[[x]], as.formula(paste0("pos.",x," ~ pre.",x," + Group")))
+})
+
+(df = do.call(rbind, lapply(lvalues, FUN = function(x) {
+  add_significance(get_anova_table(aov.md[[x]]))
+})))
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+```{r include=FALSE}
+pwc.md <- lapply(lvalues, FUN = function(x) {
+  emmeans_test(ndat[[x]],
+               as.formula(paste0("pos.",x," ~ Group")),
+               covariate = paste0("pre.",x),
+               p.adjust.method = "bonferroni", detailed = T)
+})
+df = do.call(rbind, pwc.md)
+(df = df[,c(".y.","group1","group2","estimate","statistic","p","p.adj","p.adj.signif")])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+```{r include=FALSE}
+df <- do.call(plyr::rbind.fill, lapply(lvalues, FUN = function(x) {
+  get_emmeans(pwc.md[[x]])
+}))
+(df = df[,c("Group","emmean","se","df","conf.low","conf.high",
+            c(paste0("pre.",names(lvalues))))])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+#### Plotting results
+
+
+```{r include=FALSE}
+plots <- lapply(lvalues, FUN = function(x) {
+  stat.test <- pwc.md[[x]] %>% add_xy_position(x = "Group")
+  ggline(get_emmeans(pwc.md[[x]]), x = "Group", y = "emmean") +
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+    stat_pvalue_manual(stat.test, hide.ns = TRUE, tip.length = FALSE) +
+    ylab(paste0(x, "(ability)")) + xlab("") +
+    labs(subtitle = get_test_label(aov.md[[x]], row = 2),
+         caption = get_pwc_label(pwc.md[[x]]))
+})
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$score
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.cc
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.em.norm
+```
+
+
+
+
+
+## Evaluating H4 (null)
+
+H4 (null): Students who are not in the 10-th percentile during pre-test and who participated in scenarios with our proposed ITS and with training (experimental group) have the same learning outcomes that students who participated in scenarios without our proposed ITS and with training (control group), controlling their previous knowledge in the subject.
+
+
+```{r include=FALSE}
+sdat <- lapply(lvalues, FUN = function(x) {
+  idx = which(dat[[paste0("pre.",x)]]
+              < as.numeric(quantile(dat[[paste0("pre.",x)]],
+                                    probs = seq(0,1,0.1))[10]))
+  sdat = dat[idx,]
+  sdat[[paste0("dif.",x)]] = sdat[[paste0("pos.",x)]] - sdat[[paste0("pre.",x)]]
+  sdat
+})
+```
+
+
+### Removing outliers and non-normal data
+
+```{r include=FALSE}
+lm.mdls <- lapply(lvalues, FUN = function(x) {
+  mdl <- lm(as.formula(paste0("pos.",x," ~ pre.",x," + Group")), data=sdat[[x]])
+  cbind(ID = sdat[[x]]$ID, augment(mdl))  
+})
+
+outliers <- lapply(lvalues, FUN = function(x) {
+  lm.mdls[[x]]$ID[which(abs(lm.mdls[[x]][[".std.resid"]]) > 3)]
+})
+
+non.normals <- lapply(lvalues, FUN = function(x) {
+  idx = which(!sdat[[x]]$ID %in% outliers[[x]])
+  c(getNonNormal(lm.mdls[[x]]$.std.resid[idx], lm.mdls[[x]]$ID[idx]))
+})
+```
+
+```{r}
+(outliers)
+```
+
+```{r}
+(non.normals)
+```
+
+**Note**: because there is a lower number of data which cause non.normality, then we decided to remove only ouliers.
+
+
+### Performing ANCOVA test (removing outliers)
+
+```{r include=FALSE}
+ndat <- lapply(lvalues, FUN = function(x) {
+  dat[which(!dat$ID %in% outliers[[x]]),]
+})
+
+(df <- do.call(rbind, lapply(lvalues, FUN = function(x) {
+  mdl <- lm(as.formula(paste0("pos.",x," ~ pre.",x," + Group")),data=ndat[[x]])
+  mdl <- cbind(ID = ndat[[x]]$ID, augment(mdl))
+  normality.test(mdl[[".std.resid"]])
+})))
+```
+
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+
+```{r include=FALSE}
+aov.md <- lapply(lvalues, FUN = function(x) {
+  anova_test(ndat[[x]], as.formula(paste0("pos.",x," ~ pre.",x," + Group")))
+})
+
+(df = do.call(rbind, lapply(lvalues, FUN = function(x) {
+  add_significance(get_anova_table(aov.md[[x]]))
+})))
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+```{r include=FALSE}
+pwc.md <- lapply(lvalues, FUN = function(x) {
+  emmeans_test(ndat[[x]],
+               as.formula(paste0("pos.",x," ~ Group")),
+               covariate = paste0("pre.",x),
+               p.adjust.method = "bonferroni", detailed = T)
+})
+df = do.call(rbind, pwc.md)
+(df = df[,c(".y.","group1","group2","estimate","statistic","p","p.adj","p.adj.signif")])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+```{r include=FALSE}
+df <- do.call(plyr::rbind.fill, lapply(lvalues, FUN = function(x) {
+  get_emmeans(pwc.md[[x]])
+}))
+(df = df[,c("Group","emmean","se","df","conf.low","conf.high",
+            c(paste0("pre.",names(lvalues))))])
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+#### Plotting results
+
+
+```{r include=FALSE}
+plots <- lapply(lvalues, FUN = function(x) {
+  stat.test <- pwc.md[[x]] %>% add_xy_position(x = "Group")
+    ggline(get_emmeans(pwc.md[[x]]), x = "Group", y = "emmean") +
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+    stat_pvalue_manual(stat.test, hide.ns = TRUE, tip.length = FALSE) +
+    ylab(paste0(x, "(ability)")) + xlab("") +
+    labs(subtitle = get_test_label(aov.md[[x]], row = 2),
+         caption = get_pwc_label(pwc.md[[x]]))
+})
+```
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$score
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.cc
+```
+
+
+```{r, dpi=300, fig.width=6, fig.height=6}
+plots$irt.em.norm
+```
+
+
+
+
+### Performing ANCOVA test (removing outliers and non.normal data)
+
+```{r include=FALSE}
+ndat <- lapply(lvalues, FUN = function(x) {
+  sdat[[x]][which(!sdat[[x]]$ID %in% c(outliers[[x]], non.normals[[x]])),]
+})
+
+(df <- do.call(rbind, lapply(lvalues, FUN = function(x) {
+  mdl <- lm(as.formula(paste0("pos.",x," ~ pre.",x," + Group")),data=ndat[[x]])
+  mdl <- cbind(ID = ndat[[x]]$ID, augment(mdl))
+  normality.test(mdl[[".std.resid"]])
+})))
+```
+
+```{r echo=TRUE, purl=FALSE}
+knitr::kable(df)
+```
+
+**Note**: Not posible to remove non.normal data 
+
+
